@@ -37,11 +37,15 @@ function Register() {
     "w-full border border-slate-300 rounded-md px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-slate-400";
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-100">
-      <div className="bg-slate-50 border border-slate-300 shadow-md rounded-lg p-8 w-full max-w-md">
-        <h2 className="text-2xl font-semibold text-slate-700 text-center mb-6">
+    <div className="auth-shell">
+      <div className="auth-card">
+        <div className="auth-mark" aria-hidden="true">L</div>
+        <h2 className="text-2xl font-semibold text-center mb-2">
           Create your account
         </h2>
+        <p className="mb-6 text-center text-sm text-slate-500">
+          Get started with LeaveFlow
+        </p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <input
@@ -106,7 +110,7 @@ function Register() {
 
         <p className="mt-5 text-center text-sm text-slate-600">
           Already have an account?{" "}
-          <Link to="/login" className="font-medium text-slate-800 hover:underline">
+          <Link to="/login" className="font-medium text-blue-700 hover:underline">
             Sign in
           </Link>
         </p>

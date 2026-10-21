@@ -8,7 +8,8 @@ function Login() {
     email: "",
     password: ""
   });
-
+  const [accountType, setAccountType] = useState("employee");
+  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   const navigate = useNavigate();
@@ -18,10 +19,16 @@ function Login() {
 
     if (loading) return;
 
+    setError("");
     setLoading(true);
 
     try {
       const res = await API.post("/auth/login", form);
+
+      if (res.data.role !== accountType) {
+        setError(`This account is not registered as an ${accountType === "admin" ? "administrator" : "employee"}. Choose the correct account type.`);
+        return;
+      }
 
       localStorage.setItem("token", res.data.token);
       localStorage.setItem("role", res.data.role);
@@ -31,11 +38,11 @@ function Login() {
       const message = err.response?.data?.message;
 
       if (message === "Password is incorrect") {
-        alert("Password is incorrect");
+        setError("Password is incorrect");
       } else if (message === "Email does not exist") {
-        alert("This email does not exist");
+        setError("This email does not exist");
       } else {
-        alert(message || "Login failed");
+        setError(message || "Login failed");
       }
     } finally {
       setLoading(false);
@@ -44,19 +51,54 @@ function Login() {
 
   return (
 
-    <div className="min-h-screen flex items-center justify-center bg-slate-100">
+    <div className="auth-shell">
 
-      <div className="bg-slate-50 border border-slate-300 shadow-md rounded-lg p-8 w-full max-w-md">
+      <div className="auth-card">
 
-        <h2 className="text-2xl font-semibold text-slate-700 text-center mb-6">
-          Leave Management System
+        <div className="auth-mark" aria-hidden="true">L</div>
+        <h2 className="text-2xl font-semibold text-center mb-2">
+          Welcome back
         </h2>
+        <p className="mb-6 text-center text-sm text-slate-500">
+          Sign in to your LeaveFlow account
+        </p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          <fieldset className="space-y-2">
+            <legend className="mb-2 text-sm font-medium text-slate-700">
+              Sign in as
+            </legend>
+            <div className="role-choice-grid">
+              {[
+                { value: "employee", label: "Employee" },
+                { value: "admin", label: "Administrator" },
+              ].map((option) => (
+                <label
+                  key={option.value}
+                  className={`role-choice${accountType === option.value ? " selected" : ""}`}
+                >
+                  <input
+                    type="radio"
+                    name="accountType"
+                    value={option.value}
+                    checked={accountType === option.value}
+                    onChange={() => setAccountType(option.value)}
+                  />
+                  <span>{option.label}</span>
+                </label>
+              ))}
+            </div>
+            <p className="text-xs text-slate-500">
+              Administrator access is available only to accounts authorized by your system administrator.
+            </p>
+          </fieldset>
 
           <input
             type="email"
-            placeholder="admin@gmail.com"
+            placeholder={accountType === "admin" ? "admin@example.com" : "employee@example.com"}
+            aria-label="Email address"
+            autoComplete="email"
+            required
             className="w-full border border-slate-300 rounded-md px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"
             onChange={(e) =>
               setForm({ ...form, email: e.target.value })
@@ -65,17 +107,26 @@ function Login() {
 
           <input
             type="password"
-            placeholder="admin@123"
+            placeholder={accountType === "admin" ? "Administrator password" : "Employee password"}
+            aria-label="Password"
+            autoComplete="current-password"
+            required
             className="w-full border border-slate-300 rounded-md px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"
             onChange={(e) =>
               setForm({ ...form, password: e.target.value })
             }
           />
 
+          {error && (
+            <p role="alert" className="text-sm text-red-600">
+              {error}
+            </p>
+          )}
+
           <button
             type="submit"
             disabled={loading}
-            className={`w-full py-2 rounded-md text-white transition ${loading
+            className={`w-full py-2.5 rounded-md text-white font-medium transition ${loading
                 ? "bg-slate-500 cursor-not-allowed"
                 : "bg-slate-800 hover:bg-slate-900"
               }`}
@@ -87,7 +138,7 @@ function Login() {
 
         <p className="mt-5 text-center text-sm text-slate-600">
           Don&apos;t have an account?{" "}
-          <Link to="/register" className="font-medium text-slate-800 hover:underline">
+          <Link to="/register" className="font-medium text-blue-700 hover:underline">
             Create account
           </Link>
         </p>
