@@ -17,6 +17,7 @@ app.use("/api/auth", require("./routes/authRoutes"));
 app.use("/api/users", require("./routes/userRoutes"));
 app.use("/api/leave-types", require("./routes/leaveTypeRoutes"));
 app.use("/api/leaves", leaveRoutes);
+app.use("/api/notifications", require("./routes/notificationRoutes"));
 
 const PORT = process.env.PORT || 5000;
 

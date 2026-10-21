@@ -1,6 +1,29 @@
 const LeaveRequest = require("../models/LeaveRequest");
-const User = require("../models/User");
 const LeaveType = require("../models/LeaveType");
+const User = require("../models/User");
+const Notification = require("../models/Notification");
+const { getInclusiveLeaveDays, parseDateOnly } = require("../utils/leaveDates");
+
+const getApprovedDays = async (employeeId, leaveTypeId) => {
+  const approvedLeaves = await LeaveRequest.find({
+    employee: employeeId,
+    leaveType: leaveTypeId,
+    status: "approved",
+  }).select("fromDate toDate");
+
+  return approvedLeaves.reduce((total, leave) => {
+    const days = getInclusiveLeaveDays(
+      leave.fromDate.toISOString().slice(0, 10),
+      leave.toDate.toISOString().slice(0, 10),
+    );
+
+    if (!days) {
+      throw new Error(`Approved leave request ${leave._id} has invalid dates`);
+    }
+
+    return total + days;
+  }, 0);
+};
 
 // Employee apply leave
 exports.applyLeave = async (req, res) => {
@@ -12,52 +35,65 @@ exports.applyLeave = async (req, res) => {
       return res.status(400).json({ message: "Invalid leave type" });
     }
 
-    const start = new Date(fromDate);
-    const end = new Date(toDate);
+    const start = parseDateOnly(fromDate);
+    const end = parseDateOnly(toDate);
+    const requestedDays = getInclusiveLeaveDays(fromDate, toDate);
     const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const todayString = [
+      today.getUTCFullYear(),
+      String(today.getUTCMonth() + 1).padStart(2, "0"),
+      String(today.getUTCDate()).padStart(2, "0"),
+    ].join("-");
 
-    if (start > end) {
+    if (!start || !end || !requestedDays) {
       return res.status(400).json({
-        message: "From date cannot be after To date",
+        message: "Enter valid leave dates, with the end date on or after the start date",
       });
     }
 
-    if (start < today) {
+    if (fromDate < todayString) {
       return res.status(400).json({
         message: "Leave cannot start in the past",
       });
     }
 
-    const user = await User.findById(req.user.id);
-
-    const typeName = type.name.toLowerCase();
-
-    if (typeName.includes("sick") && user.leaveBalance.sick <= 0) {
+    const maxDays = Number(type.maxDays);
+    if (!Number.isFinite(maxDays) || maxDays < 1) {
       return res.status(400).json({
-        message: "No sick leave balance remaining",
+        message: "This leave type does not have a valid maximum day allowance",
       });
     }
 
-    if (typeName.includes("casual") && user.leaveBalance.casual <= 0) {
-      return res.status(400).json({
-        message: "No casual leave balance remaining",
-      });
-    }
+    const usedDays = await getApprovedDays(req.user.id, type._id);
+    const remainingDays = Math.max(0, maxDays - usedDays);
 
-    if (typeName.includes("annual") && user.leaveBalance.annual <= 0) {
+    if (requestedDays > remainingDays) {
       return res.status(400).json({
-        message: "No annual leave balance remaining",
+        message: `This request is for ${requestedDays} calendar days, but only ${remainingDays} remain for ${type.name}`,
       });
     }
 
     const leave = await LeaveRequest.create({
       employee: req.user.id,
-      leaveType,
-      fromDate,
-      toDate,
+      leaveType: type._id,
+      fromDate: start,
+      toDate: end,
       reason,
     });
+
+    const employee = await User.findById(req.user.id).select("name");
+    const admins = await User.find({ role: "admin" }).select("_id");
+    if (admins.length) {
+      await Notification.insertMany(
+        admins.map((admin) => ({
+          recipient: admin._id,
+          type: "leave_requested",
+          title: "New leave request",
+          message: `${employee?.name || "An employee"} requested ${type.name} from ${fromDate} to ${toDate}.`,
+          link: "/manage-leaves",
+        })),
+      );
+    }
 
     res.json(leave);
   } catch (err) {
@@ -89,6 +125,10 @@ exports.updateStatus = async (req, res) => {
   try {
     const { status } = req.body;
 
+    if (!["approved", "rejected"].includes(status)) {
+      return res.status(400).json({ message: "Status must be approved or rejected" });
+    }
+
     const leave = await LeaveRequest.findById(req.params.id)
       .populate("leaveType")
       .populate("employee");
@@ -97,44 +137,55 @@ exports.updateStatus = async (req, res) => {
       return res.status(404).json({ message: "Leave not found" });
     }
 
-    // Only deduct balance if approving
-    if (status === "approved" && leave.status === "pending") {
-      const user = await User.findById(leave.employee._id);
+    if (leave.status === status) {
+      return res.json(leave);
+    }
 
-      const type = leave.leaveType.name.toLowerCase();
+    if (leave.status !== "pending") {
+      return res.status(400).json({
+        message: "Only pending leave requests can be approved or rejected",
+      });
+    }
 
-      if (type.includes("sick")) {
-        if (user.leaveBalance.sick <= 0) {
-          return res
-            .status(400)
-            .json({ message: "No sick leave balance left" });
-        }
-        user.leaveBalance.sick -= 1;
+    if (!leave.employee || !leave.leaveType) {
+      return res.status(400).json({
+        message: "The employee or leave type for this request no longer exists",
+      });
+    }
+
+    if (status === "approved") {
+      const requestedDays = getInclusiveLeaveDays(
+        leave.fromDate.toISOString().slice(0, 10),
+        leave.toDate.toISOString().slice(0, 10),
+      );
+      const maxDays = Number(leave.leaveType.maxDays);
+
+      if (!requestedDays || !Number.isFinite(maxDays) || maxDays < 1) {
+        return res.status(400).json({
+          message: "The leave request has invalid dates or allowance settings",
+        });
       }
 
-      if (type.includes("casual")) {
-        if (user.leaveBalance.casual <= 0) {
-          return res
-            .status(400)
-            .json({ message: "No casual leave balance left" });
-        }
-        user.leaveBalance.casual -= 1;
-      }
+      const usedDays = await getApprovedDays(leave.employee._id, leave.leaveType._id);
+      const remainingDays = Math.max(0, maxDays - usedDays);
 
-      if (type.includes("annual")) {
-        if (user.leaveBalance.annual <= 0) {
-          return res
-            .status(400)
-            .json({ message: "No annual leave balance left" });
-        }
-        user.leaveBalance.annual -= 1;
+      if (requestedDays > remainingDays) {
+        return res.status(400).json({
+          message: `This request is for ${requestedDays} calendar days, but only ${remainingDays} remain for ${leave.leaveType.name}`,
+        });
       }
-
-      await user.save();
     }
 
     leave.status = status;
     await leave.save();
+
+    await Notification.create({
+      recipient: leave.employee._id,
+      type: status === "approved" ? "leave_approved" : "leave_rejected",
+      title: `Leave request ${status}`,
+      message: `Your ${leave.leaveType.name} request from ${leave.fromDate.toISOString().slice(0, 10)} to ${leave.toDate.toISOString().slice(0, 10)} was ${status}.`,
+      link: "/my-leaves",
+    });
 
     res.json(leave);
   } catch (err) {

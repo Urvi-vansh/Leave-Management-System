@@ -4,6 +4,9 @@ import API from "../api/axios";
 function LeaveRequestForm() {
 
   const [types, setTypes] = useState([]);
+  const [leaves, setLeaves] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
   const [form, setForm] = useState({
     leaveType: "",
@@ -12,30 +15,84 @@ function LeaveRequestForm() {
     reason: ""
   });
 
-  const [error, setError] = useState('')
-
+  const [error, setError] = useState("");
+  const today = new Date();
+  const todayString = [
+    today.getFullYear(),
+    String(today.getMonth() + 1).padStart(2, "0"),
+    String(today.getDate()).padStart(2, "0"),
+  ].join("-");
 
   useEffect(() => {
     const fetchTypes = async () => {
       try {
-        const res = await API.get("/leave-types");
-        setTypes(res.data);
+        const [typesRes, leavesRes] = await Promise.all([
+          API.get("/leave-types"),
+          API.get("/leaves/mine"),
+        ]);
+        setTypes(typesRes.data);
+        setLeaves(leavesRes.data);
       } catch (err) {
-        console.error(err);
+        setLoadError(err.response?.data?.message || "Could not load leave balance information");
+      } finally {
+        setLoading(false);
       }
     };
 
     fetchTypes();
   }, []);
 
+  const selectedType = types.find((type) => type._id === form.leaveType);
+  const approvedDays = selectedType
+    ? leaves
+        .filter((leave) => {
+          const leaveTypeId = leave.leaveType?._id || leave.leaveType;
+          return leave.status === "approved" && leaveTypeId === selectedType._id;
+        })
+        .reduce((total, leave) => {
+          const start = new Date(`${leave.fromDate.slice(0, 10)}T00:00:00Z`);
+          const end = new Date(`${leave.toDate.slice(0, 10)}T00:00:00Z`);
+          return total + Math.floor((end - start) / 86400000) + 1;
+        }, 0)
+    : 0;
+  const remainingDays = selectedType
+    ? Math.max(0, Number(selectedType.maxDays) - approvedDays)
+    : 0;
+  const requestedDays = form.fromDate && form.toDate
+    ? Math.floor(
+        (new Date(`${form.toDate}T00:00:00Z`) -
+          new Date(`${form.fromDate}T00:00:00Z`)) /
+          86400000,
+      ) + 1
+    : 0;
+
+  const updateDate = (field, value) => {
+    const updatedForm = { ...form, [field]: value };
+    setForm(updatedForm);
+
+    if (updatedForm.fromDate && updatedForm.fromDate < todayString) {
+      setError("Start date cannot be before today");
+    } else if (
+      updatedForm.fromDate &&
+      updatedForm.toDate &&
+      updatedForm.toDate < updatedForm.fromDate
+    ) {
+      setError("End date cannot be before the start date");
+    } else {
+      setError("");
+    }
+  };
+
   const submit = async (e) => {
     e.preventDefault();
+    if (error || (selectedType && requestedDays > remainingDays)) return;
 
     try {
 
       await API.post("/leaves", form);
 
       alert("Leave application submitted successfully!");
+      setError("");
 
       setForm({
         leaveType: "",
@@ -45,7 +102,7 @@ function LeaveRequestForm() {
       });
 
     } catch (err) {
-      console.error("Leave submit error:", err);
+      setError(err.response?.data?.message || "Could not submit leave request");
     }
   };
 
@@ -70,9 +127,10 @@ function LeaveRequestForm() {
         <select
           className="w-full border border-slate-300 rounded-md px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"
           value={form.leaveType}
-          onChange={(e) =>
-            setForm({ ...form, leaveType: e.target.value })
-          }
+          onChange={(e) => {
+            setError("");
+            setForm({ ...form, leaveType: e.target.value });
+          }}
           required
         >
           <option value="">Select Leave Type</option>
@@ -84,6 +142,13 @@ function LeaveRequestForm() {
           ))}
 
         </select>
+
+        {selectedType && (
+          <p className="mt-2 text-sm text-slate-500" aria-live="polite">
+            Remaining balance: <strong>{remainingDays}</strong> of {selectedType.maxDays} calendar days
+            {requestedDays > 0 && ` · This request: ${requestedDays} calendar ${requestedDays === 1 ? "day" : "days"}`}
+          </p>
+        )}
 
       </div>
 
@@ -99,23 +164,10 @@ function LeaveRequestForm() {
 
           <input
             type="date"
+            min={todayString}
             className="w-full border border-slate-300 rounded-md px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"
             value={form.fromDate}
-            onChange={(e) => {
-              const selectedDate = e.target.value
-              const today = new Date().toISOString().split('T')[0]
-
-              if (selectedDate < today) {
-                setError('Start date cannot be before today')
-              } else {
-                setError('')
-              }
-
-              setForm({ ...form, fromDate: e.target.value })
-            }
-
-
-            }
+            onChange={(e) => updateDate("fromDate", e.target.value)}
             required
           />
 
@@ -129,11 +181,10 @@ function LeaveRequestForm() {
 
           <input
             type="date"
+            min={form.fromDate || todayString}
             className="w-full border border-slate-300 rounded-md px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"
             value={form.toDate}
-            onChange={(e) =>
-              setForm({ ...form, toDate: e.target.value })
-            }
+            onChange={(e) => updateDate("toDate", e.target.value)}
             required
           />
 
@@ -154,9 +205,10 @@ function LeaveRequestForm() {
           placeholder="Explain the reason for your leave..."
           className="w-full border border-slate-300 rounded-md px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"
           value={form.reason}
-          onChange={(e) =>
-            setForm({ ...form, reason: e.target.value })
-          }
+          onChange={(e) => {
+            setError("");
+            setForm({ ...form, reason: e.target.value });
+          }}
           required
         />
 
@@ -167,12 +219,23 @@ function LeaveRequestForm() {
           {error}
         </div>
       )}
+      {loadError && (
+        <div role="alert" className="bg-red-100 border border-red-400 text-red-700 px-4 py-2 rounded">
+          {loadError}
+        </div>
+      )}
+      {selectedType && requestedDays > remainingDays && (
+        <div role="alert" className="bg-red-100 border border-red-400 text-red-700 px-4 py-2 rounded">
+          This request exceeds the remaining {remainingDays} calendar {remainingDays === 1 ? "day" : "days"} for {selectedType.name}.
+        </div>
+      )}
       {/* Submit */}
       <button
         type="submit"
+        disabled={loading || Boolean(loadError) || Boolean(error) || (Boolean(selectedType) && requestedDays > remainingDays)}
         className="bg-slate-800 text-white px-5 py-2 rounded-md hover:bg-slate-900 transition"
       >
-        Submit Leave Application
+        {loading ? "Loading leave balance..." : "Submit Leave Application"}
       </button>
 
     </form>
